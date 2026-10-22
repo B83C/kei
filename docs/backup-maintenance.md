@@ -185,7 +185,7 @@ or rendition evidence becomes eligible immediately. Status reports unresolved
 identities and deferred retries separately from failed repair attempts.
 Deferral keeps the capture revision and checkpoint pending; it is not recovery.
 
-Stable v0.25.3 uses schema 35. Even `kei status` can migrate an owned database. Stop all workers and take a matched cold backup of the complete configuration/state directory and media/sidecars before upgrading. Binaries that support schema 34 or earlier cannot open schema 35; sharing schema 35 does not establish safe downgrade compatibility. Rollback requires the matched old state and media with the retained old binary; switching only the binary or restoring only the database is unsafe. Do not reset state or lower its schema version to bypass this check. See the [v0.25.3 upgrade guide](v0.25.3-upgrade.md).
+Stable v0.26.0 uses schema 36. Even `kei status` can migrate an owned database. Stop all workers and take a matched cold backup of configuration/state, SQLite companions and media/sidecars before upgrading. Older binaries cannot open schema 36. Rollback requires the complete matched old set and retained old binary. Do not reset state or lower its schema version. See the [v0.26.0 upgrade guide](v0.26.0-upgrade.md).
 
 Kei marks unresolved asset identity cycles incomplete. Status
 remains unsafe across restarts and successful syncs in other libraries until

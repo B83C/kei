@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.26.0] - 2026-10-22
+
+### Added
+
+- Added explicit offline Trusted Legacy File acceptance for eligible preserved migrations. Acceptance records a user's local-file decision; it does not establish provider identity, source coverage or checkpoint authority. ([#998](https://github.com/rhoopr/kei/pull/998))
+- Added bounded support-history summaries for upgrade compaction, retained evidence, logical storage budgets, reused observations and capacity stops. Normal sync records these without extra debug flags; support export preserves available summaries when SQLite cannot be opened. Logical budget reclaim does not imply physical database shrinkage. ([#1028](https://github.com/rhoopr/kei/pull/1028))
+
+### Fixed
+
+- Recover eligible historical paths and selected sparse targets during normal sync when exact independent receipts or authenticated scoped evidence permit it. Preserve ambiguous legacy originals and use independent recovery destinations instead of overwriting protected paths. Unknown identity, ownership and incomplete source coverage remain held. ([#1012](https://github.com/rhoopr/kei/pull/1012), [#1020](https://github.com/rhoopr/kei/pull/1020), [#1022](https://github.com/rhoopr/kei/pull/1022); thanks [@1cu](https://github.com/1cu))
+- Recover moved asset pairs after an old master is not found only when scoped current confirmation establishes the new pair. A returned child alone does not establish ownership. ([#1015](https://github.com/rhoopr/kei/pull/1015))
+- Prevent eligible responses that differ only in refreshed asset download URLs from repeatedly growing retained pages, selections and confirmation receipts. Automatically consolidate qualifying retained duplicates before admission, preserving provenance and recovery obligations. Unknown shapes or changes to version, scope or other evidence remain separate. This includes guarded compute-state asset descriptors. ([#1027](https://github.com/rhoopr/kei/pull/1027))
+- Resolve album relation targets with bounded lookups and shared fallback scans, and retain missing-reference observations with clearer lookup-scope diagnostics. ([#980](https://github.com/rhoopr/kei/pull/980), [#989](https://github.com/rhoopr/kei/pull/989), [#995](https://github.com/rhoopr/kei/pull/995), [#1005](https://github.com/rhoopr/kei/pull/1005))
+- Preserve media modification times after metadata rewrites and stream supported HEIF metadata writes with bounded retained data. ([#978](https://github.com/rhoopr/kei/pull/978), [#986](https://github.com/rhoopr/kei/pull/986); thanks [@teh-hippo](https://github.com/teh-hippo))
+- Fix session-lock lifetime across fork and cancellation, and require explicit confirmation for non-interactive state reset. ([#988](https://github.com/rhoopr/kei/pull/988), [#985](https://github.com/rhoopr/kei/pull/985))
+- Update rustls-webpki to 0.103.16 and webpki-root-certs to 1.0.10 for certificate-trust advisories. ([#1021](https://github.com/rhoopr/kei/pull/1021))
+
+### Changed
+
+- SQLite schema advances from 35 to 36. Eligible compaction retains recovery-relevant evidence and provenance, but no longer retains every superseded URL or reconstructible redundant response body. Stop all writers and preserve a matched cold backup before upgrading. Older binaries cannot read schema 36; rollback requires the complete matched pre-upgrade state and media. See [v0.26.0 upgrade guidance](docs/v0.26.0-upgrade.md).
+
+### Known limitations
+
+- Eligible recovery can progress while unrelated identity, metadata, readiness or checkpoint obligations remain held. Missing proof is not inferred from filenames, dates or local acceptance. This release does not establish complete recovery of every reported account.
+- URL-variant compaction addresses qualifying duplicate evidence, not unlimited distinct or unknown provider responses. An inbox without enough reclaimable eligible duplication can still refuse new evidence at its budget.
+- Existing duplicates, damaged media and unknown historical ownership are not automatically repaired. Safely held work remains visible; do not reset state or discard obligations to force completion.
+
 ## [0.25.3] - 2026-10-16
 
 ### Fixed
