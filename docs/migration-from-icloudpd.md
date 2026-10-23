@@ -1,126 +1,91 @@
 # Migrating from `icloudpd`
 
-> This guide retains v0.20 option mappings and historical path examples. Current stable guidance targets v0.25.3; read [Upgrade and account compatibility](v0.25.3-upgrade.md) before opening existing Kei state. Preview import before syncing an existing media archive.
+This guide is for moving a Python [icloudpd](https://github.com/icloud-photos-downloader/icloud_photos_downloader) photo archive to kei v0.26.0. Your photos can stay where they are. Preview the import first so you can see which files kei recognizes before allowing a normal sync to download anything.
 
-This guide moves an existing [`icloud-photos-downloader`](https://github.com/icloud-photos-downloader/icloud_photos_downloader) (`icloudpd`) library to Kei while reusing eligible local files. It follows the current stable route and retains named historical mappings.
+Import is not automatic deduplication. Kei must match a local file to the file it expects from iCloud. Files it cannot match may be downloaded again under a different name or folder.
 
-Before importing, stop other writers and keep an independent backup of the
-archive and any existing kei state. Do not start the setup wizard's immediate
-sync against an existing archive.
+## Before you start
 
-1. Put the existing photo directory in `[download].directory` and match the
-   path-shaping options Python used.
-2. Preview with `kei import-existing --dry-run` using that config. Consider
-   `--strict` for a cloud-prefix comparison; even a preview authenticates and
-   enumerates iCloud.
-3. Inspect matched and unmatched results. Fix layout mismatches before a real
-   import, then inspect its summary before syncing. Unmatched files can cause
-   another copy to be downloaded; import is not proof of a complete backup.
+- Stop icloudpd, kei and any other programs writing to the archive. Pause scheduled runs.
+- Make a separate backup of the photos, videos, accompanying metadata files and any existing kei configuration and state. Copy the complete state directory while kei is stopped, including database companion files. Keep the backup unchanged.
+- Use the same Apple Account and iCloud region as the original download. Keep different accounts' configuration and state separate. Check the [sign-in requirements](../README.md#before-you-install), including the Advanced Data Protection restriction.
+- Kei cannot use Python's `~/.pyicloud` cookies. Sign in with kei using your Apple Account password and trusted-device verification code. Kei saves its own session for later runs.
+- If you already use kei, read the [v0.26.0 update guide](v0.26.0-upgrade.md) first. Opening existing state can update it automatically, even during an import preview.
+- Don't let the setup wizard start an immediate sync against your existing archive. If you use the wizard, answer **no** when it offers to start syncing.
 
-kei can't reuse Python's `~/.pyicloud` cookies, so the first run still needs a
-fresh Apple login and 2FA approval. Your local photo files can stay in place.
-
-For containers, pin `ghcr.io/rhoopr/kei:0.25.3` for this stable route; `latest` and main can change independently.
+Install [v0.26.0](https://github.com/rhoopr/kei/releases/tag/v0.26.0). For Docker, use `ghcr.io/rhoopr/kei:0.26.0` and the [Docker instructions below](#docker-migration).
 
 ## If you're coming from old `icloudpd-rs`
 
-The commands in this subsection record the old path migration. Current account-bound state does not reuse those auth filenames. For v0.25.3, preserve the old source, use fresh login, and follow [account-state adoption](account-state-migration.md) for a legacy Kei database; do not copy or rename old auth files into the new namespace. The historical examples below are not the current authentication procedure.
+An old kei or icloudpd-rs database needs different handling from a Python photo folder. Preserve the original setup and follow [account-state adoption](account-state-migration.md) and the [older-version update instructions](v0.25-upgrade.md#back-up-and-adopt-existing-state).
 
-Current Kei releases don't auto-copy files from the old `icloudpd-rs` paths; they preserve and ignore the legacy authentication namespace. Use fresh authentication and the adoption procedure above. For reference, pre-account-bound migrations used the following path-copy commands; do not run them as the current upgrade procedure:
-
-<details>
-<summary>Historical path-copy example</summary>
-
-```sh
-mkdir -p ~/.config/kei/cookies
-cp ~/.config/icloudpd-rs/config.toml ~/.config/kei/config.toml
-cp ~/.icloudpd-rs/* ~/.config/kei/cookies/
-```
-
-</details>
-
-Keep the old files preserved until the matched upgrade and backup checks are complete. These examples do not establish ownership or authorize replacing a current config file.
+Do not copy or rename old authentication files into kei's current session directory. Older guides showed cookie-copy commands that no longer apply. Current kei needs its own login, and adopting old state requires confirming that it belongs to the configured account. Don't confirm ownership if it is uncertain.
 
 ## Step 1: import the existing tree
 
-Point kei at the directory that `icloudpd` has been writing to:
+Create or review your configuration before running import. Set the account and existing photo folder:
 
 ```toml
+[auth]
+username = "you@example.com"
+
 [download]
 directory = "~/Photos/iCloud"
 ```
 
-Preview the import with that config first:
+Match your old folder names, filenames, selected libraries and file versions using the sections below. Keep the same configuration for import and later syncs.
+
+Preview the matches:
 
 ```sh
-ICLOUD_USERNAME=you@example.com kei import-existing --config ~/.config/kei/config.toml --dry-run
+kei import-existing --config ~/.config/kei/config.toml --dry-run
 ```
 
-`import-existing` signs in, enumerates the selected iCloud libraries, computes
-the paths kei would use for each asset, and adopts any local file with the
-right path and size into the SQLite state database. The next `kei sync` skips
-those adopted files and downloads only new or previously failed assets.
+The preview signs in and reads the selected libraries from iCloud. It does not record files as imported or change your media. It can still create login/state files or update an existing kei database, which is why the backup comes first.
 
-Import completes enumeration of every selected library and album pass before
-writing adoption rows. An interrupted or failed listing leaves those rows
-unwritten. The preflight uses memory proportional to selected renditions, all
-durable catalogue paths and current receipts, and cached directory entries.
-There is no fixed memory cap or disk spool. Existing owners, including omitted
-assets and historical album paths, prevent another asset adopting their files.
+Read the summary. If many expected files are unmatched, stop and check the settings before continuing. An unmatched file is left alone, but a later sync may download another copy. Pay particular attention to [date-folder differences](#date-folders).
 
-The `name-id7` suffix uses the same selected child identity as sync, including
-its guarded legacy compatibility behavior. When two children share a short
-suffix, import can use a unique full child-ID collision filename. A shared
-short-name file needs an existing current state record whose local hash verifies
-that exact file; otherwise import reports the rendition as unmatched and logs
-an ambiguity warning. Multiple same-size ordinal siblings and colliding
-sanitized child IDs also remain unmatched without verified durable ownership.
-Import does not rename or overwrite these files.
-
-
-After reviewing the preview and matching the layout, run the actual import:
+Once the preview looks right, run the import:
 
 ```sh
-ICLOUD_USERNAME=you@example.com kei import-existing --config ~/.config/kei/config.toml
+kei import-existing --config ~/.config/kei/config.toml
 ```
 
-If most files show as unmatched, stop and fix the path options before running a
-real import. A mismatch doesn't error, and it doesn't rewrite your files. It
-just leaves those assets unknown to kei, which means a later sync may download
-another copy. The one cause no path option fixes is a
-[date folder](#date-folders) difference, where Python filed an asset under the
-timezone of the machine it ran on and kei expects the timezone the photo was
-taken in.
+Kei records recognized files as already downloaded. A later sync can reuse them when its checks and settings still agree. This does not prove that every file in iCloud is backed up or that an old file is undamaged.
 
-The import is safe to repeat. Re-importing the same files updates the existing
-state rows.
+Import reads all selected libraries and albums before recording matches. If that listing fails or is interrupted, no files are recorded as imported. If it stops later while recording matches, some may already have been saved; repeating the import is supported. Large selections can use substantial memory.
+
+### How files are matched
+
+By default, kei checks the expected path and size, then saves a checksum of the local file for future checks. It also checks existing ownership records so one item cannot claim another item's file.
+
+Kei recognizes supported icloudpd naming patterns, but a matching name and size are not always enough. If two iCloud items could match the same file, kei leaves it unmatched unless its existing records can resolve the conflict. This includes collisions in shortened `name-id7` names, numbered duplicates and names changed to remove unsupported characters. Import does not rename or overwrite those files.
 
 ### Strict adoption check
 
-By default, import matches an existing file by expected path and size, then
-stores kei's own SHA-256 for future verification. If you want a safer first
-adoption pass, enable strict mode:
+For an extra check, add `--strict` to the preview and actual import:
+
+```sh
+kei import-existing --config ~/.config/kei/config.toml --dry-run --strict
+kei import-existing --config ~/.config/kei/config.toml --strict
+```
+
+This compares the first 64 KiB of each candidate file with iCloud, or the whole file if it is smaller. It is not a full-file comparison for larger files. A mismatch or failed comparison is counted under `Strict refusals` and the file is not imported.
+
+To keep this check enabled:
 
 ```toml
 [import]
 strict = true
 ```
 
-or use it for one run:
-
-```sh
-kei import-existing --config ~/.config/kei/config.toml --strict
-```
-
-Strict mode fetches a small prefix from iCloud and compares it with the local file before adopting a same-name, same-size match. Mismatches show up as `Strict refusals` in the import summary. `--dry-run --strict` runs the same check without writing adoption rows. Database opening and authentication can still create runtime artifacts or migrate owned state; take the backup first.
-
 ## Match Python's path layout
 
-Most failed migrations come from one of these differences.
+Use the settings from your actual icloudpd setup. Don't assume the defaults match your archive.
 
 ### Folder structure
 
-Python's default `--folder-structure "{:%Y/%m/%d}"` maps to plain strftime in TOML:
+Python's `--folder-structure "{:%Y/%m/%d}"` becomes:
 
 ```toml
 [download]
@@ -128,15 +93,15 @@ directory = "~/Photos/iCloud"
 folder_structure = "%Y/%m/%d"
 ```
 
-kei splits folder templates by pass type:
+Kei has separate folder settings for different kinds of albums:
 
-| TOML field | Used for | Default |
+| Setting | Files it places | Default |
 |---|---|---|
-| `[download].folder_structure` | Unfiled photos | `%Y/%m/%d` |
-| `[download].folder_structure_albums` | User album passes | `{album}` |
-| `[download].folder_structure_smart_folders` | Smart folder passes | `{smart-folder}` |
+| `[download].folder_structure` | Photos and videos outside user albums | `%Y/%m/%d` |
+| `[download].folder_structure_albums` | User albums | `{album}` |
+| `[download].folder_structure_smart_folders` | Smart folders | `{smart-folder}` |
 
-If your Python tree included album names, put the album template in TOML:
+If your existing folders include album names and dates:
 
 ```toml
 [download]
@@ -144,46 +109,32 @@ directory = "~/Photos/iCloud"
 folder_structure_albums = "{album}/%Y/%m/%d"
 ```
 
-On v0.20 and later, `{album}` is only accepted in `folder_structure_albums`.
+Use `{album}` only in `folder_structure_albums`, not in `folder_structure`.
 
 ### Date folders
 
-Python renders date folders in the timezone of the machine running it. kei
-renders them in the timezone the photo was taken in, from the per-asset offset
-Apple stores alongside each asset. kei therefore places an asset in the same
-folder whatever host it runs on, while Python's layout depends on how the
-machine that built the tree was configured. The two agree only where that
-machine was set to the capture timezone, so a photo taken while travelling, or
-a tree Python built on a UTC server or container, can sort into a different
-date folder under kei. Assets for which Apple supplies no usable offset keep
-host-local rendering and land where Python put them.
+Kei uses the photo's capture timezone when Apple supplies a usable offset. Otherwise it uses the timezone of the computer running kei. Your Python archive may have used a different timezone, so the expected date folder can differ, especially for travel photos or downloads made on a UTC server.
 
-`import-existing` adopts a file only at the path kei derives, so an asset whose
-folders differ stays unadopted. kei does not move media that already sits in a
-Python-created folder. A full sync downloads an affected asset into its
-capture-local folder and leaves the earlier copy in place, so expect both
-copies until you remove the older one.
+Import does not move files between date folders or search every folder for a possible match. If the paths differ, a normal sync may download another copy in the expected folder and leave the old copy in place. Review those differences before syncing; don't delete the original to force a match.
 
-Sidecar timestamps are the exception. Python's `--xmp-sidecar` builds its
-timestamps from the same per-asset offset, so both tools record the same
-capture time and offset even where the folder dates differ.
+Dates written into XMP files can still agree even when the folder dates differ. Matching timestamps alone do not prove that kei can reuse a file.
 
 ### Filename policy
 
-If Python was run with `--file-match-policy name-id7`, put the same policy in TOML:
+If you used Python's `--file-match-policy name-id7`, set:
 
 ```toml
 [photos]
 file_match_policy = "name-id7"
 ```
 
-kei also matches Python's size-suffixed duplicate fallback, invalid filename
-replacement, RAW naming, live-photo MOV companions, and Unicode stripping by
-default. If you used `--keep-unicode-in-filenames`, set `[photos].keep_unicode_in_filenames = true` before import.
+Kei supports icloudpd's size-suffixed duplicate names, replacement of unsupported filename characters, RAW naming and Live Photo video names. It normally removes Unicode characters from filenames. If you used `--keep-unicode-in-filenames`, set `[photos].keep_unicode_in_filenames = true` before import.
+
+Always check the preview: collisions and existing ownership records can still prevent a match.
 
 ### Live photos, RAW, and sizes
 
-Use the same media-shaping settings you used with Python:
+Match the file versions your Python setup downloaded. For example:
 
 ```toml
 [photos]
@@ -194,35 +145,30 @@ live_photo_mov_filename_policy = "suffix"
 raw_policy = "as-is"
 ```
 
-`import-existing --recent 100` is supported. The days form, such as
-`--recent 30d`, is sync-only and import will reject it.
+Edited and alternative versions, including RAW, need the corresponding settings. See [example.config.toml](../example.config.toml) for the available choices.
+
+You can try a smaller import with `--recent 100`. Import accepts a count, not a date window: `--recent 30d` works only with sync.
 
 ### Libraries and albums
 
-The runtime default is the primary iCloud Photos library. The setup wizard
-defaults to all visible libraries and writes a `{library}` segment for unfiled
-paths when that avoids mixing primary and shared files.
+Without explicit selection settings, kei uses the primary library, its user albums and photos outside those albums. Smart folders are not selected by default. The setup wizard can select all visible libraries and add a `{library}` folder to keep files from different libraries apart, so review what it saved.
 
-If you want shared libraries too, import with the same library selector that
-sync will read from TOML:
-
-```sh
-kei import-existing --library all --config ~/.config/kei/config.toml
-```
+To include all libraries, set this in the configuration used by both import and sync:
 
 ```toml
 [filters]
 libraries = ["all"]
 ```
 
-Then run sync with that config:
+You can also select libraries for an individual import:
 
 ```sh
-kei sync --config ~/.config/kei/config.toml
+kei import-existing --library all --config ~/.config/kei/config.toml --dry-run
 ```
 
-For multi-library trees, add `{library}` to the active templates if you want
-zone-separated directories:
+That command-line choice is not saved for later syncs.
+
+If your existing archive separates libraries, match that layout in the active folder settings:
 
 ```toml
 [download]
@@ -231,39 +177,25 @@ folder_structure = "{library}/%Y/%m/%d"
 folder_structure_albums = "{library}/{album}/%Y/%m/%d"
 ```
 
-`import-existing` doesn't have `--album`, `--smart-folder`, or `--unfiled` CLI
-flags. It reads those selectors from `config.toml`, using the same defaults as
-sync: all user albums, no smart folders, and an unfiled pass. If you use a
-config file for sync selection, pass that same `--config` during import.
+Import reads album, smart-folder and unfiled choices from the configuration; it has no `--album`, `--smart-folder` or `--unfiled` flags.
 
-Explicit album and smart-folder selectors are collection-scoped in v0.20. When
-`[filters].albums` or `[filters].smart_folders` is set, sync and
-`import-existing` look for those passes across every visible library. The
-`--library` import flag and `[filters].libraries` still scope unfiled photos.
+Explicit album and smart-folder selections are searched across all visible libraries. The library selector still controls photos outside albums. Setting `libraries = ["primary"]` therefore does not restrict an explicitly named album to the primary library. Check the preview before importing.
 
 ## Step 2: sync
 
-After the import looks good:
+Review the actual import summary before starting:
 
 ```sh
 kei sync --config ~/.config/kei/config.toml
 ```
 
-Put the account and sync directory in TOML:
+Use the same account, folders and selection settings. If unexpected bulk downloads start, stop and review which files were unmatched. Don't reset kei's state or remove existing photos to force progress.
 
-```toml
-[auth]
-username = "you@example.com"
+Keep the saved state as well as your media. It normally lives in `~/.config/kei`; with a custom configuration file, it normally lives beside that file. `data_dir` or `KEI_DATA_DIR` can override the location.
 
-[download]
-directory = "~/Photos/iCloud"
-```
+Use `kei password set` if you want kei to save a prompted password. The `--save-password` flag on sync only saves a password supplied directly on the command line or through the environment; it does not save prompted, password-file or password-command input.
 
-For the full TOML option dictionary with defaults and valid values, see
-[`example.config.toml`](../example.config.toml) and the wiki
-[Configuration](https://github.com/rhoopr/kei/wiki/Configuration) page.
-
-After the first 2FA approval, kei stores session state under `data_dir` (default `~/.config/kei`; `KEI_DATA_DIR` can override it for automation). Run `kei password set` to store a prompted password for future runs. `sync --save-password` only persists a direct CLI/environment password; prompted, file, command and already-stored sources warn and do not save through that flag.
+For all settings, see [example.config.toml](../example.config.toml) and [Configuration](https://github.com/rhoopr/kei/wiki/Configuration). For problems, keep the normal output and use [support export](support-export.md); review anything you share for private information.
 
 ## Common flag mapping
 
@@ -277,8 +209,8 @@ After the first 2FA approval, kei stores session state under `data_dir` (default
 | `--list-albums` | `kei list albums` | The old flag was removed in v0.20. |
 | `--list-libraries` | `kei list libraries` | The old flag was removed in v0.20. |
 | `--cookie-directory` | `data_dir` | The old flag was removed in v0.20. New default is `~/.config/kei`; `KEI_DATA_DIR` still works for automation. |
-| `--folder-structure "{:%Y/%m/%d}"` | `[download].folder_structure = "%Y/%m/%d"` | Python wrapper syntax is still accepted. Use `folder_structure_albums` and `folder_structure_smart_folders` for the other passes. |
-| `--size original` | `[photos].resolution = "original"` | Values: `original`, `medium`, `thumb`, `none`. Use `edited = true` for adjusted renditions and `alternative = true` for alternative or RAW renditions. |
+| `--folder-structure "{:%Y/%m/%d}"` | `[download].folder_structure = "%Y/%m/%d"` | Python wrapper syntax is still accepted. Use `folder_structure_albums` and `folder_structure_smart_folders` for albums and smart folders. |
+| `--size original` | `[photos].resolution = "original"` | Values: `original`, `medium`, `thumb`, `none`. Use `edited = true` for edited versions and `alternative = true` for other versions, including RAW. |
 | `--threads-num` | `[download].threads` | Default is 10. With `[download].bandwidth_limit` and no explicit thread count, default drops to 1. |
 | `--skip-videos`, `--skip-photos` | `[filters].media` | Use `media = ["photos", "live-photos"]` to skip videos, or `media = ["videos", "live-photos"]` to skip normal photos. |
 | `--skip-live-photos` | `[photos].live_photo_mode = "skip"` | The old flag was removed in v0.20. |
@@ -290,24 +222,24 @@ After the first 2FA approval, kei stores session state under `data_dir` (default
 | `--file-match-policy` | `[photos].file_match_policy` | `name-size-dedup-with-suffix` or `name-id7`. |
 | `--align-raw` | `[photos].raw_policy` | `as-is`, `prefer-raw`, or `prefer-jpeg`. |
 | `--domain` | `[auth].domain` | `com` or `cn`. |
-| `--watch-with-interval` | `[watch].interval`; Docker uses `kei service run` | Built-in watch mode moved to durable config and service commands. |
+| `--watch-with-interval` | `[watch].interval`; Docker uses `kei service run` | Save the repeat interval in the configuration and use the service commands. |
 | `--log-level` | `--log-level` or `log_level` | `debug`, `info`, `warn`, `error`. |
 | `--only-print-filenames` | `--only-print-filenames` | Per-run flag that prints paths and doesn't download. |
-| `--dry-run` | `--dry-run` | Skips media/adoption changes as appropriate; still authenticates and initializes runtime artifacts. Import can open/migrate owned state. |
+| `--dry-run` | `--dry-run` | Preview only. Import still signs in and can create or update its state files, but does not record matched files as imported. |
 | `--notification-script` | `[notifications].script` | kei sends `KEI_EVENT`, `KEI_MESSAGE`, `KEI_ICLOUD_USERNAME`, per-cycle `KEI_*` stats, and `KEI_REPORT_JSON` when `[report].json` is configured. |
 
 ## Python flags without a kei equivalent
 
 | Python flag | kei status |
 |---|---|
-| `--until-found` | Replaced by SQLite state. |
-| `--auto-delete` | Planned. |
-| `--delete-after-download` | Planned. |
-| `--keep-icloud-recent-days` | Planned. |
-| `--smtp-*` | Planned. |
-| `--use-os-locale` | Not planned. |
+| `--until-found` | Kei keeps a saved record of completed downloads. |
+| `--auto-delete` | Not supported in v0.26.0. |
+| `--delete-after-download` | Not supported in v0.26.0. |
+| `--keep-icloud-recent-days` | Not supported in v0.26.0. |
+| `--smtp-*` | Not supported in v0.26.0. |
+| `--use-os-locale` | Not supported in v0.26.0. |
 | `--password-provider` | Use `--password-file`, `--password-command`, or `kei password set`. |
-| `--mfa-provider` | Not applicable. Use trusted-device 2FA with `kei login get-code` and `kei login submit-code`. |
+| `--mfa-provider` | Use kei login with your password and trusted-device verification code; Python MFA providers are not reused. |
 
 `[metadata].xmp_sidecar` is implemented in kei, along with
 `[metadata].embed_xmp`. They write iCloud metadata that Python didn't handle
@@ -318,33 +250,33 @@ the same way.
 | Option or command | What it does |
 |---|---|
 | `kei config setup` | Interactive config wizard. |
-| `kei config show` | Print resolved config as TOML. |
+| `kei config show` | Show the settings kei will use. |
 | `--config <path>` | Use a TOML config file. |
 | `--password-file <path>` | Read the password from a file or Docker secret. |
 | `--password-command <cmd>` | Read the password from Unix `sh -c`; unsupported on native Windows. |
-| `kei password set` | Store the password in the OS keyring or encrypted file backend. |
-| `--save-password` | On sync/service-run, persists only direct CLI/environment password input after auth; use `password set` for prompted/file/command input. |
+| `kei password set` | Save the password in the operating system keyring or an encrypted file. |
+| `--save-password` | For sync and service runs, save a password supplied directly by command line or environment after login. Use `password set` for other sources. |
 | `[filters].libraries` | Select primary, shared, all, named, or excluded iCloud libraries. |
 | `[filters].smart_folders` | Sync Favorites, Screenshots, Hidden, Recently Deleted, and other Apple smart folders across visible libraries when explicitly set. |
-| `[filters].unfiled = false` | Disable the separate pass for photos not in any user album. |
+| `[filters].unfiled = false` | Skip photos and videos outside user albums. |
 | `[filters].filename_exclude` | Skip files by glob, such as `*.AAE` or `Screenshot*`. |
-| `[download].bandwidth_limit` | Cap total download throughput, for example `10M` or `1.5Mi`. |
+| `[download].bandwidth_limit` | Limit total download speed, for example `10M` or `1.5Mi`. |
 | `[metadata].set_exif_rating`, `.set_exif_gps`, `.set_exif_description` | Write more iCloud metadata into downloaded media. |
 | `[metadata].embed_xmp`, `[metadata].xmp_sidecar` | Embed XMP or write `.xmp` sidecars. |
 | `[download.retry].per_transfer` | Retry downloads inside one transfer. Default is 3. |
 | `[download.retry].per_asset` | Cap lifetime attempts per asset. Default is 10; 0 disables the cap. |
 | `[download].temp_suffix` | Temp file suffix for partial downloads. Default is `.kei-tmp`. |
-| `[report].json` | Write the latest sync report atomically as JSON. |
+| `[report].json` | Save the latest sync report as a JSON file. |
 | `[server].bind`, `[server].port` | Serve `/healthz` and `/metrics` during watch mode. |
-| `[watch].reconcile_every_n_cycles` | Periodic read-only reconciliation warning pass during watch mode. |
-| `--friendly`, `--no-friendly` | Control the interactive progress UI. |
+| `[watch].reconcile_every_n_cycles` | Periodically check for differences and report warnings during watch mode, without changing files. |
+| `--friendly`, `--no-friendly` | Control the interactive progress display. |
 | `kei status` | Show database and sync status. |
 | `kei verify` | Check downloaded files exist, with optional checksums. |
-| `kei reconcile` | Mark missing local files as failed so the next sync re-downloads them. |
+| `kei reconcile` | Record missing local files so the next sync downloads them again. Read the maintenance guide first. |
 
 ## Removed kei compatibility aliases
 
-v0.20 removed the remaining v0.13 compatibility aliases:
+This section is only for old kei or icloudpd-rs configurations. These aliases were removed in v0.20; use the settings on the right with v0.26.0:
 
 | Deprecated | Use |
 |---|---|
@@ -356,83 +288,76 @@ v0.20 removed the remaining v0.13 compatibility aliases:
 
 ## Docker migration
 
-For the current stable route, use `ghcr.io/rhoopr/kei:0.25.3`. It uses `/config` and
-`/photos` volumes. The image runs `kei service run --config /config/config.toml`
-by default, with `KEI_DATA_DIR=/config` as container runtime glue. Set
-`[download].directory = "/photos"` in the config file. `service run` uses a
-24-hour watch fallback when `[watch].interval` is unset.
+Use the existing photo folder, but give kei its own persistent configuration folder. Do not start a background sync until the import preview and actual import have been reviewed.
 
-A minimal compose file:
+Create `config/config.toml`:
+
+```toml
+[auth]
+username = "you@example.com"
+
+[download]
+directory = "/photos"
+```
+
+Add the matching folder, filename and selection settings described above. A Compose file for the preview and import is:
 
 ```yaml
 services:
   kei:
-    image: ghcr.io/rhoopr/kei:0.25.3
+    image: ghcr.io/rhoopr/kei:0.26.0
     container_name: kei
-    restart: unless-stopped
     stop_grace_period: 30s
     environment:
-      - ICLOUD_USERNAME=${ICLOUD_USERNAME}
-      - TZ=${TZ:-UTC}
-      # Already set by the image. Keep this for lower VSZ in long watch runs.
-      # - MALLOC_ARENA_MAX=2
+      TZ: "${TZ:-UTC}"
+      KEI_CHOWN_PHOTOS: "0"
     volumes:
       - ./config:/config
       - /path/to/photos:/photos
 ```
 
-Set `PUID` and `PGID` when the container should write files as a host user,
-which is common on NAS installs.
+Replace `/path/to/photos` with your existing archive. Keep `/config` between runs: it contains kei's settings, saved login and state.
 
-Avoid `ICLOUD_PASSWORD` in Docker if you can; it shows up in `docker inspect`.
-Use a Docker secret with `--password-file /run/secrets/icloud_password`, an
-external secret manager via `--password-command`, or run `kei password set`
-inside the container if your credential backend supports it.
+The container runs as root unless both `PUID` and `PGID` are set. For NAS or shared storage, set them to the host user who should own newly written files. When both are set, startup changes ownership under `/config` and normally under `/photos`. The example uses `KEI_CHOWN_PHOTOS: "0"` to leave existing photo ownership alone. Prepare permissions so the chosen user can read and write the archive. Even an import preview runs the container's startup steps.
 
-On glibc systems, long-running multi-threaded processes can reserve large
-virtual malloc arenas even when their resident memory is small. The Docker
-image sets `MALLOC_ARENA_MAX=2`, and `kei install` writes the same setting into
-Linux systemd units. If you run kei from your own service manager and care
-about VSZ, set `MALLOC_ARENA_MAX=2` before `kei service run`.
-
-If the container exits with a v0.20 `/config/config.toml` error, it found old
-sync env vars such as `KEI_DOWNLOAD_DIR` but no mounted config file. Move those
-durable settings into `/config/config.toml` and keep env for secrets or runtime
-glue.
-
-For a one-shot import, stop the worker first and preview against the existing mounted tree. Use the Compose project directory and the same config; review unmatched results before removing `--dry-run`:
+From the Compose directory, stop any existing kei worker and pull the released image:
 
 ```sh
 docker compose stop kei
+docker compose pull
+```
+
+For an interactive login and import preview:
+
+```sh
+docker compose run --rm -it kei login --config /config/config.toml
 docker compose run --rm -it kei import-existing --config /config/config.toml --dry-run
 ```
 
-For headless 2FA:
+Enter the password and trusted-device verification code when prompted. The saved session remains in `/config`. After checking the preview, run:
 
 ```sh
-docker exec --user UID:GID kei kei login get-code --config /config/config.toml
-docker exec --user UID:GID kei kei login submit-code 123456 --config /config/config.toml
+docker compose run --rm -it kei import-existing --config /config/config.toml
+docker compose run --rm -it kei sync --config /config/config.toml
 ```
 
-Replace `UID:GID` with the numeric config owner (configured PUID/PGID, or `0:0` for the root default), not necessarily the SSH operator's IDs. This exec flow targets a running worker awaiting 2FA; resume the Compose project after reviewing the import if it is still stopped.
+Add `--strict` to both import commands if you want the extra comparison. Review each result before proceeding to the next command.
+
+Avoid putting `ICLOUD_PASSWORD` in the Compose environment: it is visible through `docker inspect`. Use a Docker secret with `--password-file /run/secrets/icloud_password`, an existing secret manager through `--password-command`, or `kei password set` inside the container where supported. See [Credentials](https://github.com/rhoopr/kei/wiki/Credentials).
+
+Once normal sync works as expected, follow [Run unattended](docker-first-backup.md#run-unattended). The image's default command is `kei service run --config /config/config.toml`; it repeats every 24 hours when no watch interval is set. Keep scheduled icloudpd runs stopped so both tools do not write to the archive.
+
+Older container setups sometimes supplied settings such as `KEI_DOWNLOAD_DIR` only through environment variables. Current kei requires those settings in `/config/config.toml`; use environment variables only where current documentation supports them.
 
 ## Known output differences
 
-- EXIF writes can change file size compared with Python because kei uses a
-  different metadata writer. The image/video content is the same.
-- kei preserves the source extension case Apple reports. Python often
-  lowercased extensions.
-- If Apple doesn't send an original filename, kei falls back to a sanitized
-  title when available, then the record name.
-- `[metadata].embed_xmp` and `[metadata].xmp_sidecar` add metadata that
-  Python-created files won't have.
+- Metadata writes can change file size, which can prevent a match with the old download. Keep metadata-write settings unchanged while checking the import. See [Metadata output](metadata.md) before enabling them.
+- Kei preserves the extension case Apple reports, which can differ from your Python filenames.
+- If Apple provides no original filename, kei uses a cleaned-up title when available, then its record name.
+- Embedded XMP and separate XMP files are optional and can differ from Python's output.
 
 ## What you don't need to worry about
 
-- Re-downloading the whole library after import. Adopted rows are trusted until
-  relevant download settings change.
-- Python cookies. Re-auth once; kei stores its own session state.
-- Full scans on every run. After the first sync, kei uses CloudKit sync tokens
-  for incremental changes.
-- `--until-found`. The state DB is the marker of what has already been
-  downloaded.
+You don't need to move every photo into a new folder or copy Python's cookies. Configure kei to match your existing archive and let the preview show what it can reuse.
+
+You do need to review unmatched files and keep the backup. Import cannot promise that nothing will be downloaded again, remove duplicates, repair damaged media or prove that your backup includes every iCloud item. Later syncs can use saved progress, but recovery or changes to your selection can require another scan.
