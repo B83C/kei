@@ -500,13 +500,12 @@ pub trait DownloadStateStore: Send + Sync {
         download_checksum: Option<&str>,
         mark_capture_repair: bool,
     ) -> Result<(), StateError> {
-        self.mark_downloaded_with_capture_repair(
+        self.mark_verified_download_with_source(
             library,
             id,
             version_size,
             local_path,
-            local_checksum,
-            download_checksum,
+            (local_checksum, download_checksum, download_checksum),
             mark_capture_repair,
         )
         .await
@@ -521,7 +520,7 @@ pub trait DownloadStateStore: Send + Sync {
         mark_capture_repair: bool,
     ) -> Result<(), StateError> {
         let (local_checksum, download_checksum, _source_checksum) = checksums;
-        self.mark_verified_download(
+        self.mark_downloaded_with_capture_repair(
             library,
             id,
             version_size,

@@ -201,28 +201,6 @@ pub(super) async fn write_embed_metadata(
     capture_timestamp_repair: CaptureTimestampRepair,
     temp_suffix: &str,
 ) -> EmbedWriteResult {
-    write_embed_metadata_with_gps(
-        path,
-        expected_fingerprint,
-        payload,
-        created_local,
-        flags,
-        capture_timestamp_repair,
-        temp_suffix,
-    )
-    .await
-    .0
-}
-
-pub(super) async fn write_embed_metadata_with_gps(
-    path: &Path,
-    expected_fingerprint: Option<crate::download::file::ExistingFileFingerprint>,
-    payload: Arc<MetadataPayload>,
-    created_local: DateTime<FixedOffset>,
-    flags: MetadataFlags,
-    capture_timestamp_repair: CaptureTimestampRepair,
-    temp_suffix: &str,
-) -> (EmbedWriteResult, bool) {
     match prepare_embed_metadata(
         path,
         expected_fingerprint,
@@ -234,13 +212,10 @@ pub(super) async fn write_embed_metadata_with_gps(
     )
     .await
     {
-        EmbedPrepareResult::Prepared(prepared) => {
-            let wrote_gps = prepared.wrote_gps;
-            (publish_embed_metadata(path, prepared).await, wrote_gps)
-        }
-        EmbedPrepareResult::NoWrite => (EmbedWriteResult::NoWrite, false),
-        EmbedPrepareResult::Failed => (EmbedWriteResult::Failed, false),
-        EmbedPrepareResult::InputChanged => (EmbedWriteResult::InputChanged, false),
+        EmbedPrepareResult::Prepared(prepared) => publish_embed_metadata(path, prepared).await,
+        EmbedPrepareResult::NoWrite => EmbedWriteResult::NoWrite,
+        EmbedPrepareResult::Failed => EmbedWriteResult::Failed,
+        EmbedPrepareResult::InputChanged => EmbedWriteResult::InputChanged,
     }
 }
 

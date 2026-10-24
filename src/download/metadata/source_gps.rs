@@ -1,6 +1,6 @@
 //! Bounded source EXIF and QuickTime GPS decoding.
 
-use super::values::{GpsCoordinatePrecision, SourceGpsMetadata, XmpRational};
+use super::values::{SourceGpsMetadata, XmpRational};
 use crate::download::heif;
 use anyhow::{Context, Result};
 use little_exif::filetype::FileExtension;
@@ -167,6 +167,9 @@ fn strip_ascii_case_suffix<'a>(value: &'a str, suffix: &str) -> Option<&'a str> 
 }
 
 fn merge_companion_still_source_gps(metadata: &mut SourceGpsMetadata, movie_path: &Path) {
+    if metadata.latitude.is_none() || metadata.longitude.is_none() {
+        return;
+    }
     let Some(parent) = movie_path.parent() else {
         return;
     };
@@ -201,7 +204,9 @@ fn merge_companion_still_source_gps(metadata: &mut SourceGpsMetadata, movie_path
             else {
                 continue;
             };
-            if still_gps.datetime.is_none() && still_gps.speed.is_none() {
+            if (still_gps.datetime.is_none() && still_gps.speed.is_none())
+                || !metadata.matches_provider_coordinates(still_gps.latitude, still_gps.longitude)
+            {
                 continue;
             }
             if metadata.datetime.is_none() {
@@ -261,32 +266,24 @@ fn read_movie_source_gps<R: std::io::Read + std::io::Seek>(
             read_box_header(source, source_len, offset, source_len, &mut budget)?;
         let next = offset + size;
         if &kind == b"moov" {
-            let metadata =
-                read_moov_source_gps(source, source_len, offset + header_size, next, &mut budget)?;
-            if metadata != SourceGpsMetadata::default() {
-                return Ok(metadata);
-            }
-        }
-        offset = next;
-    }
-    Ok(SourceGpsMetadata::default())
-}
-
-fn read_moov_source_gps<R: std::io::Read + std::io::Seek>(
-    source: &mut R,
-    source_len: u64,
-    mut offset: u64,
-    end: u64,
-    budget: &mut usize,
-) -> Result<SourceGpsMetadata, TiffGpsError> {
-    while offset < end {
-        let (size, header_size, kind) = read_box_header(source, source_len, offset, end, budget)?;
-        let next = offset + size;
-        if &kind == b"meta" {
-            let metadata =
-                read_mdta_meta_box(source, source_len, offset + header_size, next, budget)?;
-            if metadata != SourceGpsMetadata::default() {
-                return Ok(metadata);
+            let mut moov_offset = offset + header_size;
+            while moov_offset < next {
+                let (child_size, child_hdr, child_kind) =
+                    read_box_header(source, source_len, moov_offset, next, &mut budget)?;
+                let child_next = moov_offset + child_size;
+                if &child_kind == b"meta" {
+                    let metadata = read_mdta_meta_box(
+                        source,
+                        source_len,
+                        moov_offset + child_hdr,
+                        child_next,
+                        &mut budget,
+                    )?;
+                    if metadata != SourceGpsMetadata::default() {
+                        return Ok(metadata);
+                    }
+                }
+                moov_offset = child_next;
             }
         }
         offset = next;
@@ -441,17 +438,15 @@ fn read_mdta_meta_box<R: std::io::Read + std::io::Seek>(
         item_offset = item_next;
     }
 
-    let ((latitude, latitude_precision), (longitude, longitude_precision)) = match coordinates {
-        Some(((lat, lat_prec), (lon, lon_prec))) => {
-            ((Some(lat), Some(lat_prec)), (Some(lon), Some(lon_prec)))
-        }
-        None => ((None, None), (None, None)),
+    let ((latitude, latitude_tolerance), (longitude, longitude_tolerance)) = match coordinates {
+        Some(((lat, lat_tol), (lon, lon_tol))) => ((Some(lat), lat_tol), (Some(lon), lon_tol)),
+        None => ((None, 0.0), (None, 0.0)),
     };
     Ok(SourceGpsMetadata {
         latitude,
         longitude,
-        latitude_precision,
-        longitude_precision,
+        latitude_tolerance,
+        longitude_tolerance,
         datetime: None,
         speed: None,
         speed_ref: None,
@@ -459,10 +454,7 @@ fn read_mdta_meta_box<R: std::io::Read + std::io::Seek>(
     })
 }
 
-fn parse_iso6709_component(
-    component: &str,
-    axis: GpsAxis,
-) -> Option<(f64, GpsCoordinatePrecision)> {
+fn parse_iso6709_component(component: &str, axis: GpsAxis) -> Option<(f64, f64)> {
     let bytes = component.as_bytes();
     let (&sign, rest) = bytes.split_first()?;
     if sign != b'+' && sign != b'-' || rest.is_empty() {
@@ -500,18 +492,15 @@ fn parse_iso6709_component(
     if !value.is_finite() || value.abs() > maximum {
         return None;
     }
-    Some((
-        value,
-        GpsCoordinatePrecision::Iso6709 {
-            negative: sign == b'-',
-            decimals,
-        },
-    ))
+    let tolerance = if (4..=9).contains(&decimals) {
+        0.5 / 10_f64.powi(i32::from(decimals)) + 1e-9
+    } else {
+        0.0
+    };
+    Some((value, tolerance))
 }
 
-fn parse_iso6709_coordinates(
-    text: &str,
-) -> Option<((f64, GpsCoordinatePrecision), (f64, GpsCoordinatePrecision))> {
+fn parse_iso6709_coordinates(text: &str) -> Option<((f64, f64), (f64, f64))> {
     let trimmed = text.trim_end_matches('/').trim();
     let bytes = trimmed.as_bytes();
     if !bytes.first().is_some_and(|&b| b == b'+' || b == b'-') {
@@ -884,25 +873,25 @@ fn read_tiff_source_gps<R: std::io::Read + std::io::Seek>(
         (None, _) => None,
     };
     let speed_ref = speed.as_ref().and(speed_ref);
-    let (latitude, latitude_precision) = match latitude
+    let (latitude, latitude_tolerance) = match latitude
         .zip(latitude_ref)
         .and_then(|(value, reference)| source_gps_degrees(&value, reference, GpsAxis::Latitude))
     {
-        Some((deg, precision)) => (Some(deg), precision),
-        None => (None, None),
+        Some((deg, tolerance)) => (Some(deg), tolerance),
+        None => (None, 0.0),
     };
-    let (longitude, longitude_precision) = match longitude
+    let (longitude, longitude_tolerance) = match longitude
         .zip(longitude_ref)
         .and_then(|(value, reference)| source_gps_degrees(&value, reference, GpsAxis::Longitude))
     {
-        Some((deg, precision)) => (Some(deg), precision),
-        None => (None, None),
+        Some((deg, tolerance)) => (Some(deg), tolerance),
+        None => (None, 0.0),
     };
     Ok(SourceGpsMetadata {
         latitude,
         longitude,
-        latitude_precision,
-        longitude_precision,
+        latitude_tolerance,
+        longitude_tolerance,
         datetime,
         speed,
         speed_ref,
@@ -920,7 +909,7 @@ fn source_gps_degrees(
     values: &[XmpRational; 3],
     reference: [u8; 2],
     axis: GpsAxis,
-) -> Option<(f64, Option<GpsCoordinatePrecision>)> {
+) -> Option<(f64, f64)> {
     const MINUTES_PER_DEGREE: f64 = 60.0;
     const SECONDS_PER_DEGREE: f64 = 3600.0;
     let (positive, negative, maximum) = match axis {
@@ -938,17 +927,20 @@ fn source_gps_degrees(
     if decimal > maximum {
         return None;
     }
-    let is_negative = reference[0] == negative;
-    let signed = if is_negative { -decimal } else { decimal };
-    let precision = (values[0].denominator == 1 && values[1].denominator == 1).then_some(
-        GpsCoordinatePrecision::ExifDms {
-            negative: is_negative,
-            degrees: values[0].numerator,
-            minutes: values[1].numerator,
-            seconds: values[2],
-        },
-    );
-    Some((signed, precision))
+    let signed = if reference[0] == negative {
+        -decimal
+    } else {
+        decimal
+    };
+    // iOS EXIF quantizes arcseconds to 1/100" (`denominator >= 100`).
+    let tolerance =
+        if values[0].denominator == 1 && values[1].denominator == 1 && values[2].denominator >= 100
+        {
+            0.5 / (f64::from(values[2].denominator) * SECONDS_PER_DEGREE) + 1e-12
+        } else {
+            0.0
+        };
+    Some((signed, tolerance))
 }
 
 impl SourceGpsMetadata {
@@ -968,29 +960,18 @@ impl SourceGpsMetadata {
         coordinate_matches_axis(
             provider_lat,
             native_lat,
-            self.latitude_precision,
+            self.latitude_tolerance,
             GpsAxis::Latitude,
         ) && coordinate_matches_axis(
             provider_lon,
             native_lon,
-            self.longitude_precision,
+            self.longitude_tolerance,
             GpsAxis::Longitude,
         )
     }
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    reason = "validated WGS84 coordinates and u32 rational denominators keep scaled arcsecond arithmetic finite and non-negative"
-)]
-fn coordinate_matches_axis(
-    provider: f64,
-    native: f64,
-    precision: Option<GpsCoordinatePrecision>,
-    axis: GpsAxis,
-) -> bool {
+fn coordinate_matches_axis(provider: f64, native: f64, tolerance: f64, axis: GpsAxis) -> bool {
     let maximum = match axis {
         GpsAxis::Latitude => 90.0,
         GpsAxis::Longitude => 180.0,
@@ -1001,49 +982,9 @@ fn coordinate_matches_axis(
     if Some(provider) == Some(native) {
         return true;
     }
-    match precision {
-        Some(GpsCoordinatePrecision::ExifDms {
-            negative,
-            degrees,
-            minutes,
-            seconds,
-        }) => {
-            if (provider < 0.0) != negative || seconds.denominator == 0 {
-                return false;
-            }
-            // iOS EXIF quantizes arcseconds to 1/100" (or reduced fractions of 100).
-            // Reject 1-ULP perturbations of exact values while accepting provider
-            // coordinates that round to the exact stored EXIF DMS rational.
-            let scale = u64::from(seconds.denominator).max(100);
-            if scale % u64::from(seconds.denominator) != 0 {
-                return false;
-            }
-            let diff = (provider - native).abs();
-            let max_rounding_deg = 0.5 / ((scale as f64) * 3600.0) + 1e-12;
-            if diff <= 1e-12 || diff > max_rounding_deg {
-                return false;
-            }
-            let total_scaled_seconds = (provider.abs() * 3600.0 * (scale as f64)).round() as u64;
-            let sec_per_min = 60 * scale;
-            let quantized_sec_num = total_scaled_seconds % sec_per_min;
-            let total_minutes = total_scaled_seconds / sec_per_min;
-            let quantized_min = total_minutes % 60;
-            let quantized_deg = total_minutes / 60;
-            quantized_deg == u64::from(degrees)
-                && quantized_min == u64::from(minutes)
-                && u128::from(quantized_sec_num) * u128::from(seconds.denominator)
-                    == u128::from(seconds.numerator) * u128::from(scale)
-        }
-        Some(GpsCoordinatePrecision::Iso6709 { negative, decimals }) => {
-            if (provider < 0.0) != negative || !(4..=9).contains(&decimals) {
-                return false;
-            }
-            let scale = 10_u64.pow(u32::from(decimals)) as f64;
-            let diff = (provider - native).abs();
-            diff > 1e-12 && diff <= 0.5 / scale + 1e-9
-        }
-        None => false,
-    }
+    tolerance > 0.0
+        && provider.is_sign_negative() == native.is_sign_negative()
+        && (provider - native).abs() <= tolerance
 }
 
 #[cfg(feature = "__fuzz_internals")]
@@ -1664,9 +1605,22 @@ mod tests {
             );
 
             // Adding the paired Live Photo still in the same directory supplies
-            // GPSTimeStamp and speed to the companion movie.
+            // GPSTimeStamp and speed when its coordinates match the movie.
             let mut heic = std::fs::read("tests/data/sample.heic").expect("read sample HEIC");
-            exif_with_source_gps()
+            let mut still_exif = exif_with_source_gps();
+            still_exif.set_tag(ExifTag::GPSLatitudeRef("S".into()));
+            still_exif.set_tag(ExifTag::GPSLatitude(vec![
+                ur64(33, 1),
+                ur64(45, 1),
+                ur64(3668, 100),
+            ]));
+            still_exif.set_tag(ExifTag::GPSLongitudeRef("E".into()));
+            still_exif.set_tag(ExifTag::GPSLongitude(vec![
+                ur64(151, 1),
+                ur64(13, 1),
+                ur64(426, 100),
+            ]));
+            still_exif
                 .write_to_vec(&mut heic, FileExtension::HEIF)
                 .expect("write HEIC EXIF");
             let heic_path = dir.path().join("IMG_2555.HEIC");
@@ -1686,6 +1640,31 @@ mod tests {
                     .as_deref(),
                 Some("1777393/250000")
             );
+
+            // An unrelated sibling still at different coordinates must not
+            // bleed its GPS timestamp or speed into the movie.
+            let mut unrelated_heic =
+                std::fs::read("tests/data/sample.heic").expect("read sample HEIC");
+            let mut unrelated_exif = exif_with_source_gps();
+            unrelated_exif.set_tag(ExifTag::GPSLatitudeRef("N".into()));
+            unrelated_exif.set_tag(ExifTag::GPSLatitude(vec![
+                ur64(35, 1),
+                ur64(40, 1),
+                ur64(0, 100),
+            ]));
+            unrelated_exif.set_tag(ExifTag::GPSLongitudeRef("E".into()));
+            unrelated_exif.set_tag(ExifTag::GPSLongitude(vec![
+                ur64(139, 1),
+                ur64(45, 1),
+                ur64(0, 100),
+            ]));
+            unrelated_exif
+                .write_to_vec(&mut unrelated_heic, FileExtension::HEIF)
+                .expect("write unrelated HEIC EXIF");
+            std::fs::write(&heic_path, &unrelated_heic).expect("write unrelated HEIC");
+            let unmerged = read_source_gps(&mov_path).expect("read MOV with unrelated still");
+            assert_eq!(unmerged.datetime, None);
+            assert_eq!(unmerged.speed, None);
             std::fs::remove_file(&heic_path).ok();
         }
 

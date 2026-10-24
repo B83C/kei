@@ -269,7 +269,7 @@ pub(in crate::download) async fn download_single_task<C: crate::download::file::
         if task.media_type == crate::state::MediaType::LivePhotoImage
             && metadata_flags.contains(metadata_rewrite::MetadataFlags::XMP_SIDECAR)
         {
-            metadata_rewrite::refresh_companion_mov_sidecars(
+            exif_ok &= metadata_rewrite::refresh_companion_mov_sidecars(
                 &task.download_path,
                 Arc::clone(&task.metadata),
                 task.created_local,

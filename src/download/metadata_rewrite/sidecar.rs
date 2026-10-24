@@ -249,12 +249,15 @@ pub(in crate::download) async fn refresh_companion_mov_sidecars(
     created_local: DateTime<FixedOffset>,
     temp_suffix: &str,
     shutdown_token: &tokio_util::sync::CancellationToken,
-) {
+) -> bool {
+    if payload.latitude.is_none() || payload.longitude.is_none() {
+        return true;
+    }
     let Some(parent) = still_path.parent() else {
-        return;
+        return true;
     };
     let Some(stem) = still_path.file_stem().and_then(|s| s.to_str()) else {
-        return;
+        return true;
     };
     let mut base_stems = Vec::with_capacity(2);
     base_stems.push(stem);
@@ -266,6 +269,7 @@ pub(in crate::download) async fn refresh_companion_mov_sidecars(
     {
         base_stems.push(base);
     }
+    let mut all_ok = true;
     for base in base_stems {
         for suffix in [
             "_HEVC.MOV",
@@ -290,6 +294,17 @@ pub(in crate::download) async fn refresh_companion_mov_sidecars(
             else {
                 continue;
             };
+            let mov_check_path = mov_path.clone();
+            let (lat, lon) = (payload.latitude, payload.longitude);
+            let matches_companion = tokio::task::spawn_blocking(move || {
+                crate::download::metadata::read_source_gps(&mov_check_path)
+                    .is_ok_and(|gps| gps.matches_provider_coordinates(lat, lon))
+            })
+            .await
+            .unwrap_or(false);
+            if !matches_companion {
+                continue;
+            }
             let had_verified_accuracy = tokio::fs::read_to_string(&sidecar_path)
                 .await
                 .ok()
@@ -311,7 +326,7 @@ pub(in crate::download) async fn refresh_companion_mov_sidecars(
             } else {
                 None
             };
-            let _ = write_sidecar_metadata(
+            all_ok &= write_sidecar_metadata(
                 &mov_path,
                 Arc::clone(&payload),
                 created_local,
@@ -321,6 +336,7 @@ pub(in crate::download) async fn refresh_companion_mov_sidecars(
             .await;
         }
     }
+    all_ok
 }
 
 #[cfg(test)]

@@ -766,27 +766,6 @@ impl state::DownloadStateStore for FailingMetadataSetDb {
         result
     }
 
-    async fn mark_verified_download(
-        &self,
-        library: &str,
-        id: &str,
-        version_size: &str,
-        local_path: &std::path::Path,
-        local_checksum: &str,
-        download_checksum: Option<&str>,
-        mark_capture_repair: bool,
-    ) -> Result<(), state::error::StateError> {
-        self.mark_verified_download_with_source(
-            library,
-            id,
-            version_size,
-            local_path,
-            (local_checksum, download_checksum, download_checksum),
-            mark_capture_repair,
-        )
-        .await
-    }
-
     async fn mark_verified_download_with_source(
         &self,
         library: &str,

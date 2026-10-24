@@ -1,6 +1,8 @@
 //! Metadata writes around download-time media publication.
 
-use super::embedded::{EmbedWriteResult, write_embed_metadata_with_gps};
+use super::embedded::{
+    EmbedPrepareResult, EmbedWriteResult, prepare_embed_metadata, publish_embed_metadata,
+};
 use super::planning::{CaptureTimestampRepair, MetadataFlags};
 #[cfg(feature = "xmp")]
 use super::sidecar::write_sidecar_metadata;
@@ -73,7 +75,7 @@ pub(in crate::download) async fn write_download_metadata(
                 && (embed_path == request.final_path
                     || crate::download::metadata::is_embed_writable_path(embed_path))))
     {
-        let (embed_result, wrote_gps) = write_embed_metadata_with_gps(
+        let (embed_result, wrote_gps) = match prepare_embed_metadata(
             embed_path,
             request.expected_embed_fingerprint,
             Arc::clone(&request.payload),
@@ -82,7 +84,19 @@ pub(in crate::download) async fn write_download_metadata(
             request.capture_timestamp_repair,
             request.temp_suffix,
         )
-        .await;
+        .await
+        {
+            EmbedPrepareResult::Prepared(prepared) => {
+                let wrote_gps = prepared.wrote_gps;
+                (
+                    publish_embed_metadata(embed_path, prepared).await,
+                    wrote_gps,
+                )
+            }
+            EmbedPrepareResult::NoWrite => (EmbedWriteResult::NoWrite, false),
+            EmbedPrepareResult::Failed => (EmbedWriteResult::Failed, false),
+            EmbedPrepareResult::InputChanged => (EmbedWriteResult::InputChanged, false),
+        };
         match embed_result {
             EmbedWriteResult::Applied(output_fingerprint) => {
                 embed_applied = true;
