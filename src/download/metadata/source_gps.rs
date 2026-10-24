@@ -1,6 +1,6 @@
 //! Bounded source EXIF GPS decoding.
 
-use super::values::{SourceGpsMetadata, XmpRational};
+use super::values::{ExifDmsCoordinate, SourceGpsMetadata, XmpRational};
 use crate::download::heif;
 use anyhow::{Context, Result};
 use little_exif::filetype::FileExtension;
@@ -423,13 +423,25 @@ fn read_tiff_source_gps<R: std::io::Read + std::io::Seek>(
         (None, _) => None,
     };
     let speed_ref = speed.as_ref().and(speed_ref);
+    let (latitude, latitude_dms) = match latitude
+        .zip(latitude_ref)
+        .and_then(|(value, reference)| source_gps_degrees(&value, reference, GpsAxis::Latitude))
+    {
+        Some((deg, dms)) => (Some(deg), dms),
+        None => (None, None),
+    };
+    let (longitude, longitude_dms) = match longitude
+        .zip(longitude_ref)
+        .and_then(|(value, reference)| source_gps_degrees(&value, reference, GpsAxis::Longitude))
+    {
+        Some((deg, dms)) => (Some(deg), dms),
+        None => (None, None),
+    };
     Ok(SourceGpsMetadata {
-        latitude: latitude.zip(latitude_ref).and_then(|(value, reference)| {
-            source_gps_degrees(&value, reference, GpsAxis::Latitude)
-        }),
-        longitude: longitude.zip(longitude_ref).and_then(|(value, reference)| {
-            source_gps_degrees(&value, reference, GpsAxis::Longitude)
-        }),
+        latitude,
+        longitude,
+        latitude_dms,
+        longitude_dms,
         datetime,
         speed,
         speed_ref,
@@ -437,12 +449,17 @@ fn read_tiff_source_gps<R: std::io::Read + std::io::Seek>(
     })
 }
 
+#[derive(Clone, Copy)]
 enum GpsAxis {
     Latitude,
     Longitude,
 }
 
-fn source_gps_degrees(values: &[XmpRational; 3], reference: [u8; 2], axis: GpsAxis) -> Option<f64> {
+fn source_gps_degrees(
+    values: &[XmpRational; 3],
+    reference: [u8; 2],
+    axis: GpsAxis,
+) -> Option<(f64, Option<ExifDmsCoordinate>)> {
     const MINUTES_PER_DEGREE: f64 = 60.0;
     const SECONDS_PER_DEGREE: f64 = 3600.0;
     let (positive, negative, maximum) = match axis {
@@ -460,11 +477,96 @@ fn source_gps_degrees(values: &[XmpRational; 3], reference: [u8; 2], axis: GpsAx
     if decimal > maximum {
         return None;
     }
-    Some(if reference[0] == negative {
-        -decimal
-    } else {
-        decimal
-    })
+    let is_negative = reference[0] == negative;
+    let signed = if is_negative { -decimal } else { decimal };
+    let dms =
+        (values[0].denominator == 1 && values[1].denominator == 1).then_some(ExifDmsCoordinate {
+            negative: is_negative,
+            degrees: values[0].numerator,
+            minutes: values[1].numerator,
+            seconds: values[2],
+        });
+    Some((signed, dms))
+}
+
+impl SourceGpsMetadata {
+    pub(crate) fn matches_provider_coordinates(
+        &self,
+        provider_latitude: Option<f64>,
+        provider_longitude: Option<f64>,
+    ) -> bool {
+        let (Some(native_lat), Some(native_lon), Some(provider_lat), Some(provider_lon)) = (
+            self.latitude,
+            self.longitude,
+            provider_latitude,
+            provider_longitude,
+        ) else {
+            return false;
+        };
+        coordinate_matches_axis(
+            provider_lat,
+            native_lat,
+            self.latitude_dms,
+            GpsAxis::Latitude,
+        ) && coordinate_matches_axis(
+            provider_lon,
+            native_lon,
+            self.longitude_dms,
+            GpsAxis::Longitude,
+        )
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "validated WGS84 coordinates and u32 rational denominators keep scaled arcsecond arithmetic finite and non-negative"
+)]
+fn coordinate_matches_axis(
+    provider: f64,
+    native: f64,
+    dms: Option<ExifDmsCoordinate>,
+    axis: GpsAxis,
+) -> bool {
+    let maximum = match axis {
+        GpsAxis::Latitude => 90.0,
+        GpsAxis::Longitude => 180.0,
+    };
+    if !provider.is_finite() || !native.is_finite() || provider.abs() > maximum {
+        return false;
+    }
+    if Some(provider) == Some(native) {
+        return true;
+    }
+    let Some(dms) = dms else {
+        return false;
+    };
+    if (provider < 0.0) != dms.negative || dms.seconds.denominator == 0 {
+        return false;
+    }
+    // iOS EXIF quantizes arcseconds to 1/100" (or reduced fractions of 100).
+    // Reject 1-ULP perturbations of exact values while accepting provider
+    // coordinates that round to the exact stored EXIF DMS rational.
+    let scale = u64::from(dms.seconds.denominator).max(100);
+    if scale % u64::from(dms.seconds.denominator) != 0 {
+        return false;
+    }
+    let diff = (provider - native).abs();
+    let max_rounding_deg = 0.5 / ((scale as f64) * 3600.0) + 1e-12;
+    if diff <= 1e-12 || diff > max_rounding_deg {
+        return false;
+    }
+    let total_scaled_seconds = (provider.abs() * 3600.0 * (scale as f64)).round() as u64;
+    let sec_per_min = 60 * scale;
+    let quantized_sec_num = total_scaled_seconds % sec_per_min;
+    let total_minutes = total_scaled_seconds / sec_per_min;
+    let quantized_min = total_minutes % 60;
+    let quantized_deg = total_minutes / 60;
+    quantized_deg == u64::from(dms.degrees)
+        && quantized_min == u64::from(dms.minutes)
+        && u128::from(quantized_sec_num) * u128::from(dms.seconds.denominator)
+            == u128::from(dms.seconds.numerator) * u128::from(scale)
 }
 
 #[cfg(feature = "__fuzz_internals")]

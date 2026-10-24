@@ -8,7 +8,7 @@ pub(crate) struct GpsCoords {
     pub(crate) altitude: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct XmpRational {
     pub(super) numerator: u32,
     pub(super) denominator: u32,
@@ -26,10 +26,21 @@ impl XmpRational {
 }
 
 #[cfg(feature = "xmp")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExifDmsCoordinate {
+    pub(super) negative: bool,
+    pub(super) degrees: u32,
+    pub(super) minutes: u32,
+    pub(super) seconds: XmpRational,
+}
+
+#[cfg(feature = "xmp")]
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct SourceGpsMetadata {
     pub(crate) latitude: Option<f64>,
     pub(crate) longitude: Option<f64>,
+    pub(super) latitude_dms: Option<ExifDmsCoordinate>,
+    pub(super) longitude_dms: Option<ExifDmsCoordinate>,
     pub(crate) datetime: Option<String>,
     pub(crate) speed: Option<XmpRational>,
     pub(crate) speed_ref: Option<String>,

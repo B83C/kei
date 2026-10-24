@@ -162,16 +162,11 @@ fn plan_sidecar_write(
         ),
     };
     // CONTRACT: XMP_GPS_ACCURACY_REQUIRES_MATCHING_LOCATION
-    // Exact decoded-coordinate equality is conservative: rounding differences
-    // omit accuracy rather than using proximity as evidence of the same fix.
+    // Native coordinates must match the provider coordinates (including exact
+    // camera EXIF DMS rational quantization); proximity alone is insufficient.
     // I/O failures remain unknown under the shared sidecar ownership policy.
     let accuracy_matches_location =
-        source_gps
-            .latitude
-            .zip(source_gps.longitude)
-            .is_some_and(|(latitude, longitude)| {
-                payload.latitude == Some(latitude) && payload.longitude == Some(longitude)
-            });
+        source_gps.matches_provider_coordinates(payload.latitude, payload.longitude);
     // Current native coordinates may have been inserted by an earlier embed.
     // Reuse the pre-embed checksum, including on retries after a state reopen.
     // A changed or unrecorded source cannot establish native provenance. This
