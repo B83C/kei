@@ -186,12 +186,17 @@ async fn contract_xmp_gps_accuracy_requires_matching_location_new_writes() {
         .unwrap();
     for (name, latitude, longitude, expected) in [
         (
-            "quantized-100ths-match",
+            "quantized-hundredths-match",
             -33.760_188_333_333_33,
             151.21785,
             true,
         ),
-        ("quantized-100ths-outside-step", -33.7602, 151.21785, false),
+        (
+            "quantized-hundredths-outside-step",
+            -33.7602,
+            151.21785,
+            false,
+        ),
     ] {
         let path = dir.path().join(format!("{name}.jpg"));
         std::fs::write(&path, &quantized_jpeg).unwrap();
