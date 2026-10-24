@@ -242,5 +242,86 @@ fn plan_sidecar_from_gps(
     write
 }
 
+#[cfg(feature = "xmp")]
+pub(in crate::download) async fn refresh_companion_mov_sidecars(
+    still_path: &Path,
+    payload: Arc<MetadataPayload>,
+    created_local: DateTime<FixedOffset>,
+    temp_suffix: &str,
+    shutdown_token: &tokio_util::sync::CancellationToken,
+) {
+    let Some(parent) = still_path.parent() else {
+        return;
+    };
+    let Some(stem) = still_path.file_stem().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let mut base_stems = Vec::with_capacity(2);
+    base_stems.push(stem);
+    if let Some(start) = stem.len().checked_sub("_edited".len())
+        && stem
+            .get(start..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case("_edited"))
+        && let Some(base) = stem.get(..start).filter(|base| !base.is_empty())
+    {
+        base_stems.push(base);
+    }
+    for base in base_stems {
+        for suffix in [
+            "_HEVC.MOV",
+            "_HEVC.mov",
+            "_edited.MOV",
+            "_edited.mov",
+            ".MOV",
+            ".mov",
+        ] {
+            let mov_path = parent.join(format!("{base}{suffix}"));
+            let Some(mov_name) = mov_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let sidecar_path = parent.join(format!("{mov_name}.xmp"));
+            if !tokio::fs::try_exists(&mov_path).await.unwrap_or(false)
+                || !tokio::fs::try_exists(&sidecar_path).await.unwrap_or(false)
+            {
+                continue;
+            }
+            let Ok(_guard) =
+                crate::download::file::lock_download_destination(&mov_path, shutdown_token).await
+            else {
+                continue;
+            };
+            let had_verified_accuracy = tokio::fs::read_to_string(&sidecar_path)
+                .await
+                .ok()
+                .and_then(|text| text.parse::<xmp_toolkit::XmpMeta>().ok())
+                .and_then(|meta| {
+                    meta.property("https://github.com/rhoopr/kei/ns/1.0/", "managedFields")
+                })
+                .is_some_and(|managed| {
+                    managed
+                        .value
+                        .split(',')
+                        .any(|token| token == "exif:GPSHPositioningError")
+                });
+            let mov_source_checksum = if had_verified_accuracy {
+                crate::download::file::fingerprint_regular_file(&mov_path)
+                    .await
+                    .ok()
+                    .map(fingerprint_checksum)
+            } else {
+                None
+            };
+            let _ = write_sidecar_metadata(
+                &mov_path,
+                Arc::clone(&payload),
+                created_local,
+                mov_source_checksum.as_deref(),
+                temp_suffix,
+            )
+            .await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -265,6 +265,19 @@ pub(in crate::download) async fn download_single_task<C: crate::download::file::
             })
             .await;
         exif_ok &= !outcome.any_failed();
+        #[cfg(feature = "xmp")]
+        if task.media_type == crate::state::MediaType::LivePhotoImage
+            && metadata_flags.contains(metadata_rewrite::MetadataFlags::XMP_SIDECAR)
+        {
+            metadata_rewrite::refresh_companion_mov_sidecars(
+                &task.download_path,
+                Arc::clone(&task.metadata),
+                task.created_local,
+                context.temp_suffix,
+                context.shutdown_token,
+            )
+            .await;
+        }
 
         let disk_bytes = match tokio::fs::metadata(&task.download_path).await {
             Ok(meta) => meta.len(),

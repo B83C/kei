@@ -27,11 +27,17 @@ impl XmpRational {
 
 #[cfg(feature = "xmp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExifDmsCoordinate {
-    pub(super) negative: bool,
-    pub(super) degrees: u32,
-    pub(super) minutes: u32,
-    pub(super) seconds: XmpRational,
+pub(crate) enum GpsCoordinatePrecision {
+    ExifDms {
+        negative: bool,
+        degrees: u32,
+        minutes: u32,
+        seconds: XmpRational,
+    },
+    Iso6709 {
+        negative: bool,
+        decimals: u8,
+    },
 }
 
 #[cfg(feature = "xmp")]
@@ -39,8 +45,8 @@ pub(crate) struct ExifDmsCoordinate {
 pub(crate) struct SourceGpsMetadata {
     pub(crate) latitude: Option<f64>,
     pub(crate) longitude: Option<f64>,
-    pub(super) latitude_dms: Option<ExifDmsCoordinate>,
-    pub(super) longitude_dms: Option<ExifDmsCoordinate>,
+    pub(super) latitude_precision: Option<GpsCoordinatePrecision>,
+    pub(super) longitude_precision: Option<GpsCoordinatePrecision>,
     pub(crate) datetime: Option<String>,
     pub(crate) speed: Option<XmpRational>,
     pub(crate) speed_ref: Option<String>,
