@@ -12,7 +12,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::icloud::photos::asset::ChangeEvent;
+use crate::icloud::photos::asset::{ChangeEvent, SparseShareEvidence};
 use crate::icloud::photos::session::is_session_error as is_provider_session_error;
 use crate::icloud::photos::{PhotoAsset, ProviderRecordId, RecordLookupRequest, RecordResolution};
 use crate::types::ChangeReason;
@@ -962,6 +962,11 @@ async fn hydrate_unpaired_created_asset_deltas_inner(
 
         let master_record_name = if let Some(master) = event.master_record_name.as_deref() {
             Some(master.to_string())
+        } else if matches!(event.sparse_share, Some(SparseShareEvidence::Linked(_))) {
+            // A saved master is historical evidence, not a current reference.
+            // Recheck this sparse child through the ordinary bounded lookup so a
+            // selected target can qualify without erasing the old mapping.
+            None
         } else if let Some(db) = &config.state_db {
             match db
                 .get_master_record_name_for_asset(&config.library, &event.record_name)
