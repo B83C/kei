@@ -15,3 +15,20 @@ No Apple credentials are used in CI. Back up the affected account's stopped
 configuration/state directory before testing; do not run simultaneous clients
 against it. Test `login` first, then a read-only library listing after 2FA.
 Keep the upstream image and matched pre-test state backup for rollback.
+
+## Initial result, 2026-10-27
+
+The endpoint regression failed before the change and passed afterward. All
+235 authentication tests passed locally. Formatting and all-target/all-feature
+Clippy passed locally; hosted validation also passed with upstream's Rust
+1.94.1 toolchain. The amd64 image was built and published successfully.
+
+Image digest:
+`sha256:1b371e9511f4deb68e000c8c69f11a00f04d4887610466f9fcc35d5a730440e6`.
+
+A live login using an isolated copy of an affected account's saved state
+returned Apple's `-20101` account-information error rather than the previous
+SRP-complete HTTP 503. This is not a successful-login result. The account owner
+must verify the password interactively before attributing the new error to
+credentials or protocol behavior. Original account state and media were not
+changed. No account credentials were sent to GitHub or included in the image.
