@@ -17,7 +17,8 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - name: Install Rust toolchain
-        run: rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt && rustup default 1.95.0
+        run: rustup toolchain install 1.94.1 --profile minimal --component clippy,rustfmt && rustup default 1.94.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - name: Verify formatting
         run: cargo fmt --all --check
       - name: Check all targets and features
