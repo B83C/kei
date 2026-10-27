@@ -40,8 +40,10 @@ impl Endpoints {
                 setup: "https://setup.icloud.com/setup/ws/1",
             }),
             "cn" => Ok(Self {
-                auth_root: "https://idmsa.apple.com.cn",
-                auth: "https://idmsa.apple.com.cn/appleauth/auth",
+                // Experimental compatibility split: authenticate globally while
+                // retaining the China realm for redirects and iCloud services.
+                auth_root: "https://idmsa.apple.com",
+                auth: "https://idmsa.apple.com/appleauth/auth",
                 home: "https://www.icloud.com.cn",
                 setup: "https://setup.icloud.com.cn/setup/ws/1",
             }),
@@ -64,12 +66,12 @@ mod tests {
     }
 
     #[test]
-    fn for_domain_cn_returns_cn_urls() {
+    fn for_domain_cn_uses_global_auth_and_china_services() {
         let ep = Endpoints::for_domain("cn").unwrap();
-        assert!(ep.auth_root.contains(".cn"), "auth_root should contain .cn");
-        assert!(ep.auth.contains(".cn"), "auth should contain .cn");
-        assert!(ep.home.contains(".cn"), "home should contain .cn");
-        assert!(ep.setup.contains(".cn"), "setup should contain .cn");
+        assert_eq!(ep.auth_root, "https://idmsa.apple.com");
+        assert_eq!(ep.auth, "https://idmsa.apple.com/appleauth/auth");
+        assert_eq!(ep.home, "https://www.icloud.com.cn");
+        assert_eq!(ep.setup, "https://setup.icloud.com.cn/setup/ws/1");
     }
 
     #[test]

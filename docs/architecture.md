@@ -247,6 +247,12 @@ gap also wins.
 
 ### Account ownership and legacy adoption
 
+This experimental v0.25.3 fork maps both authentication realms to
+`idmsa.apple.com` in `src/auth/endpoints.rs`. The China realm still uses
+`www.icloud.com.cn` and `setup.icloud.com.cn`; its configured realm, OAuth
+redirect URI, and account-state namespace remain `cn`. This isolates the
+authentication-host hypothesis without changing media or durable state.
+
 Configured login and realm determine collision-resistant names for state,
 auth artifacts and encrypted credentials. Account-owner format version 1 is
 independent of the application schema version and must be checked before its
